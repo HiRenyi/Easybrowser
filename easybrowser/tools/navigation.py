@@ -15,8 +15,8 @@ from .registry import ToolContext, ToolResult
 logger = logging.getLogger(__name__)
 
 # URL 安全白名单和黑名单
-ALLOWED_PROTOCOLS = {"http", "https", "about"}
-BLOCKED_PROTOCOLS = {"file", "javascript", "data", "vbscript", "ws", "wss"}
+ALLOWED_PROTOCOLS = {"http", "https", "about", "data", "file"}
+BLOCKED_PROTOCOLS = {"javascript", "vbscript", "ws", "wss"}
 
 
 def _validate_url(url: str) -> None:

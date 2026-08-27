@@ -201,16 +201,9 @@ curl -s $BASE/api/adapters
 # 微博：抓某账号最近 N 天微博
 curl -X POST $BASE/api/adapter/weibo/get_user_posts \
   -d '{"uid":"2606218210","days":30}'
-
-# 泛微 OA：抓待办列表（只读）
-curl -X POST $BASE/api/adapter/oa/list_todos -d '{"tab":"待处理"}'
-
-# 泛微 OA：审批待办（dry_run 默认 true 只探测不提交；确认后 dry_run=false 真实提交）
-curl -X POST $BASE/api/adapter/oa/approve \
-  -d '{"requestid":"-9229303","comment":"同意，请领导批示","dry_run":true}'
 ```
 
-已内置适配器：`weibo`（get_user_posts）、`oa`（list_todos / approve）。
+已内置适配器：`weibo`（get_user_posts）。
 
 新增适配器：在 `easybrowser/adapters/` 下建 `<name>.py`，定义 `ADAPTER` dict（名称/匹配域名/能力清单），自动加载：
 
