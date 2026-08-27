@@ -110,11 +110,22 @@ class ToolRegistry:
 
         try:
             if tool.kind in ("write", "nav"):
-                async with self._browser.write_lock(tab_id) as tid:
-                    if tool.kind == "nav":
-                        async with self._browser.nav_lock(tid):
+                # 总超时须覆盖最坏路径：write+nav 两层锁排队 + 导航 load 失败退
+                # domcontentloaded 的双次 goto（此前写死 30s < 导航预算，导致把
+                # 元素/导航超时误报成"锁等待超时请重启服务"）
+                cfg = self._browser._cfg
+                total_s = (cfg.lock_timeout_ms * 2
+                           + cfg.nav_timeout_ms * 2) / 1000
+                try:
+                    async with asyncio.timeout(total_s):
+                        async with self._browser.write_lock(tab_id) as tid:
+                            if tool.kind == "nav":
+                                async with self._browser.nav_lock(tid):
+                                    return await self._execute(tool, tid, params)
                             return await self._execute(tool, tid, params)
-                    return await self._execute(tool, tid, params)
+                except asyncio.TimeoutError:
+                    raise ToolError(f'操作总超时（{int(total_s)}秒，含锁等待）。'
+                                    f'若该页面持续无响应可重启服务后重试')
             else:
                 tid = self._browser.resolve_tab_id(tab_id)
                 return await self._execute_read(tool, tid, params)

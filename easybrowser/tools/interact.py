@@ -1,12 +1,94 @@
 """操作层（20 个）工具：DOM 操作 L1 + CUA 坐标 L3 + JS 兜底 L4 + click_node L2。"""
 from __future__ import annotations
 
+import logging
+from pathlib import Path
+
 from playwright.async_api import TimeoutError as PWTimeoutError
 
 from ..errors import ToolError
 from ._util import (get_bool, get_int, get_str, normalize_key, require_int,
                     require_str, resolve_locator)
 from .registry import ToolContext, ToolResult
+
+logger = logging.getLogger(__name__)
+
+# 敏感路径黑名单（系统目录、密钥目录）
+SENSITIVE_PATH_PREFIXES = (
+    "/etc/",
+    "/var/",
+    "/usr/",
+    "/bin/",
+    "/sbin/",
+    "/.ssh/",
+    "/.aws/",
+    "/.gnupg/",
+    "/root/",
+    "/System/",  # macOS
+    "C:\\Windows\\",  # Windows
+    "C:\\Program Files\\",
+)
+
+# 豁免：macOS 每用户临时目录（tempfile 默认落点）。虽然以 /var/ 开头，
+# 但它是用户级临时区而非系统敏感目录，不豁免会让"临时文件→上传"流程整条挂掉
+EXEMPT_PATH_PREFIXES = (
+    "/var/folders/",
+    "/private/var/folders/",
+)
+
+
+def _validate_upload_path(file_path: str) -> Path:
+    """
+    验证文件上传路径的安全性
+
+    安全检查：
+    1. 解析为绝对路径
+    2. 黑名单过滤（系统目录、密钥目录）
+    3. 检查文件存在性
+
+    Args:
+        file_path: 用户提供的文件路径
+
+    Returns:
+        Path: 验证通过的绝对路径对象
+
+    Raises:
+        ToolError: 路径不合法或不安全
+    """
+    try:
+        # 解析为绝对路径
+        abs_path = Path(file_path).resolve()
+        abs_path_str = str(abs_path)
+
+        # 黑名单检查：原始路径与 resolve 后路径都查
+        # （macOS 上 /etc /var /tmp 是 symlink，resolve 后变 /private/* 会让前缀失配）
+        is_exempt = (file_path.startswith(EXEMPT_PATH_PREFIXES)
+                     or abs_path_str.startswith(EXEMPT_PATH_PREFIXES))
+        if not is_exempt:
+            for prefix in SENSITIVE_PATH_PREFIXES:
+                if file_path.startswith(prefix) or abs_path_str.startswith(prefix):
+                    logger.warning(f"Blocked upload attempt to sensitive path: {abs_path_str}")
+                    raise ToolError(
+                        f"不允许上传系统敏感目录中的文件：{prefix}* 路径被禁止访问"
+                    )
+
+        # 检查文件存在性
+        if not abs_path.exists():
+            raise ToolError(f"文件不存在：{abs_path_str}")
+
+        if not abs_path.is_file():
+            raise ToolError(f"路径不是文件：{abs_path_str}")
+
+        # 审计日志
+        logger.info(f"File upload validated: {abs_path_str}")
+
+        return abs_path
+
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f"Path validation error: {file_path} - {e}")
+        raise ToolError(f"文件路径验证失败：{str(e)}")
 
 
 async def _resolve_loc(ctx: ToolContext, p: dict) -> tuple[str, object]:
@@ -213,14 +295,40 @@ def build_interact(reg):
             kind="write", handler=browser_drag)
 
     async def browser_file_upload(ctx: ToolContext, p: dict) -> ToolResult:
+        """
+        上传文件到指定的文件输入框（必须是 <input type="file">）
+
+        安全机制：
+        - 路径解析为绝对路径并验证合法性
+        - 黑名单过滤系统敏感目录（/etc/, /.ssh/, /.aws/ 等）
+        - 检查文件存在性
+        - 记录审计日志
+        """
         kind, target = await _resolve_loc(ctx, p)
         if kind == "coords":
             raise ToolError("file_upload 需要 ref/selector 定位 input[type=file]")
+
         files = p.get("files")
         if not isinstance(files, list) or not files:
             raise ToolError("需要 files 文件路径数组")
-        await target.set_input_files([str(f) for f in files])
-        return ToolResult.ok(f"已上传 {len(files)} 个文件（{kind}）")
+
+        # 安全验证：路径检查
+        validated_paths = []
+        try:
+            for file_path in files:
+                validated_path = _validate_upload_path(str(file_path))
+                validated_paths.append(str(validated_path))
+        except ToolError as e:
+            return ToolResult.err(str(e))
+
+        # 执行上传
+        try:
+            await target.set_input_files(validated_paths,
+                                         timeout=ctx.cfg.action_timeout_ms)
+            return ToolResult.ok(f"已上传 {len(validated_paths)} 个文件（{kind}）")
+        except Exception as e:
+            logger.error(f"File upload failed: {validated_paths} - {e}")
+            return ToolResult.err(f"文件上传失败：{str(e)}")
 
     reg.add("browser_file_upload", "上传文件（需要 ref/selector 定位 input[type=file]）",
             {"ref": {"type": "string"}, "selector": {"type": "string"},

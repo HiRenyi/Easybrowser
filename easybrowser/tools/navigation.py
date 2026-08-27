@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
+from urllib.parse import urlparse
 
 from playwright.async_api import TimeoutError as PWTimeoutError
 
@@ -10,18 +12,60 @@ from ..errors import ToolError
 from ._util import get_bool, get_int, get_str, require_str, resolve_locator
 from .registry import ToolContext, ToolResult
 
+logger = logging.getLogger(__name__)
+
+# URL 安全白名单和黑名单
+ALLOWED_PROTOCOLS = {"http", "https", "about"}
+BLOCKED_PROTOCOLS = {"file", "javascript", "data", "vbscript", "ws", "wss"}
+
+
+def _validate_url(url: str) -> None:
+    """验证 URL 协议安全性。
+
+    - 白名单：http, https, about
+    - 黑名单：file, javascript, data, vbscript, ws, wss
+    - 本地地址（127.0.0.1, localhost）记录警告日志
+
+    Args:
+        url: 待验证的 URL
+
+    Raises:
+        ToolError: 协议不在白名单或在黑名单时
+    """
+    parsed = urlparse(url)
+    protocol = parsed.scheme.lower() if parsed.scheme else ""
+
+    # 拒绝空协议
+    if not protocol:
+        raise ToolError("不允许的 URL 协议: (空)（必须使用 http:// 或 https://）")
+
+    # 检查黑名单协议（优先级高）
+    if protocol in BLOCKED_PROTOCOLS:
+        raise ToolError(f"不允许的 URL 协议: {protocol}://（安全限制）")
+
+    # 检查白名单协议（兜底）
+    if protocol not in ALLOWED_PROTOCOLS:
+        raise ToolError(f"不允许的 URL 协议: {protocol}://（仅允许 http/https/about）")
+
+    # 本地地址警告
+    hostname = parsed.hostname or ""
+    if hostname in ("127.0.0.1", "localhost", "::1") or hostname.startswith("127."):
+        logger.warning(f"导航到本地地址: {url}")
+
 
 def build_navigation(reg):
     # ---------------------------------------------------------------- 导航
     async def browser_navigate(ctx: ToolContext, p: dict) -> ToolResult:
         url = require_str(p, "url")
+        _validate_url(url)  # 安全验证
         timeout = get_int(p, "timeout", ctx.cfg.nav_timeout_ms)
         try:
             resp = await ctx.page.goto(url, wait_until="load", timeout=timeout)
         except PWTimeoutError:
             # load 可能永不触发（长轮询/流式页面），退回 domcontentloaded 结果仍可用
             try:
-                await ctx.page.goto(url, wait_until="domcontentloaded", timeout=timeout)
+                resp = await ctx.page.goto(url, wait_until="domcontentloaded",
+                                           timeout=timeout)
             except PWTimeoutError:
                 raise ToolError(f"导航超时（{timeout}ms）: {url}")
         status = resp.status if resp is not None else None
@@ -67,6 +111,8 @@ def build_navigation(reg):
 
     async def browser_new_tab(ctx: ToolContext, p: dict) -> ToolResult:
         url = p.get("url") or ""
+        if url:
+            _validate_url(url)  # 安全验证
         info = await ctx.browser.new_tab(url if url else None)
         # 自动设为 active，无需手动 switch_tab（根治原版 bug）
         return ToolResult.ok(f"已打开新标签页 tab_id={info['tab_id']}: {info['url']}")

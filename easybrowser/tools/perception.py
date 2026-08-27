@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import json
+from pathlib import Path
 
 from playwright.async_api import TimeoutError as PWTimeoutError
 
@@ -122,6 +123,18 @@ def build_perception(reg):
             raw = await ctx.page.screenshot(type=fmt, quality=quality, full_page=full_page)
         except PWTimeoutError:
             raise ToolError("截图超时")
+        # 提供 path 时保存为文件（批量截图场景），自动创建父目录；否则返回 base64
+        save_path = get_str(p, "path", "")
+        if save_path:
+            path_obj = Path(save_path).expanduser()
+            try:
+                path_obj.parent.mkdir(parents=True, exist_ok=True)
+                path_obj.write_bytes(raw)
+            except OSError as e:
+                raise ToolError(f"截图保存失败: {e}")
+            return ToolResult.ok(f"截图已保存: {path_obj}（{len(raw)} 字节）",
+                                 data={"path": str(path_obj.resolve()), "size": len(raw),
+                                       "format": fmt, "full_page": full_page})
         b64 = base64.b64encode(raw).decode()
         if inline:
             mime = "image/png" if fmt == "png" else "image/jpeg"
@@ -129,11 +142,12 @@ def build_perception(reg):
         return ToolResult.ok("截图完成", data={"base64": b64, "format": fmt,
                                                "full_page": full_page})
 
-    reg.add("browser_screenshot", "截取当前页面（JPEG/PNG base64）",
+    reg.add("browser_screenshot", "截取当前页面（JPEG/PNG base64，或经 path 保存为文件）",
             {"format": {"type": "string", "description": "jpeg(默认)/png"},
              "quality": {"type": "integer", "description": "JPEG 质量 0-100（默认 80）"},
              "full_page": {"type": "boolean", "description": "整页截图（默认 false 仅视口）"},
              "inline_base64": {"type": "boolean", "description": "true 时 result 直接返回 data URI"},
+             "path": {"type": "string", "description": "可选，保存文件的绝对路径（如 /tmp/shots/page.jpg），提供时返回文件路径而非 base64"},
              "tab_id": {"type": "integer"}},
             kind="read", handler=browser_screenshot)
 

@@ -3,7 +3,7 @@ name = "easybrowser"
 version = "0.1.0"
 description = "浏览器自动化本地 HTTP API —— Playwright 托管，52 个浏览器操作工具，录制方式 + 廉价模型实现浏览器自动化"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.9"
 license = { text = "MIT" }
 dependencies = [
     "fastapi>=0.110",

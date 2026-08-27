@@ -169,7 +169,8 @@ def _compact(text: str) -> str:
 
 
 def _count_indent(line: str) -> int:
-    return len(line) - len(line.lstrip(" ")) // 2
+    # 注意括号：必须先算差值再除以缩进步长，否则优先级错误导致 compact 丢祖先行
+    return (len(line) - len(line.lstrip(" "))) // 2
 
 
 async def get_ax_snapshot(cdp, mode: str = "compact") -> tuple[str, dict]:
